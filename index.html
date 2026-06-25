@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LEITZ Slicer 1 — TPE Lattice · Prusa XL</title>
+  <link rel="stylesheet" href="css/styles.css" />
+
+  <!--
+    Import map so the ES-module code in /js can `import ... from "three"`.
+    Pinned to a specific Three.js version for reproducible static deploys.
+    No build step required — works as a plain GitHub Pages site.
+  -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">
+      <span class="logo">▦</span>
+      <span class="title">LEITZ Slicer 1</span>
+      <span class="subtitle">Lattice · Grid Shells · Prusa XL · TPE</span>
+    </div>
+    <div class="topbar-actions">
+      <label class="topbar-field" title="Sides per filament tube (more = smoother, larger file)">OBJ sides
+        <input type="number" id="obj-sides" value="6" min="3" max="16" step="1" />
+      </label>
+      <button id="btn-export-obj" disabled title="Export printed toolpaths as an OBJ of filament beads (for KeyShot)">⬇ Export .obj</button>
+      <button id="btn-export" class="primary" disabled>⬇ Export .gcode</button>
+    </div>
+  </header>
+
+  <main id="layout">
+    <!-- ============================ LEFT: PARAMETERS ============================ -->
+    <aside id="left-panel" class="panel">
+      <div class="panel-scroll">
+
+        <section class="group">
+          <h2>Presets</h2>
+          <label class="field">
+            <span>Load preset</span>
+            <select id="preset-select"><option value="">— choose a preset —</option></select>
+          </label>
+          <div class="preset-buttons">
+            <button id="btn-preset-save" title="Save current settings as a named preset">💾 Save</button>
+            <button id="btn-preset-export" title="Download current settings as JSON">⬇ Export</button>
+            <button id="btn-preset-import" title="Load settings from a JSON file">⬆ Import</button>
+            <input type="file" id="preset-file" accept=".json,application/json" hidden />
+          </div>
+          <button id="btn-printability" class="full" title="Scan settings for printability problems">✓ Check printability</button>
+          <button id="btn-pa-tower" class="full" title="Download a standalone Pressure-Advance calibration tower">⎍ Generate PA tuning tower</button>
+          <div id="preset-status" class="hint"></div>
+          <div id="printability-report" class="pcheck-list"></div>
+        </section>
+
+        <section class="group">
+          <h2>1 · Model</h2>
+          <div id="dropzone" class="dropzone">
+            <div class="dz-inner">
+              <div class="dz-icon">⬚</div>
+              <div class="dz-text"><strong>Drop an STL here</strong><br />or click to browse</div>
+              <input type="file" id="file-input" accept=".stl" hidden />
+            </div>
+          </div>
+          <details class="sub" id="form-opts">
+            <summary>Create a cushion form (no STL needed)</summary>
+            <label class="field"><span>Shape</span>
+              <select id="form-shape">
+                <option value="disc">Round disc (Ø × H)</option>
+                <option value="oval">Oval pad (W × D × H)</option>
+                <option value="rect">Rectangle (W × D × H)</option>
+              </select>
+            </label>
+            <div class="grid-3">
+              <label class="field"><span>W / Ø (mm)</span><input type="number" id="form-w" value="100" min="10" max="150" /></label>
+              <label class="field"><span>D (mm)</span><input type="number" id="form-d" value="80" min="10" max="150" /></label>
+              <label class="field"><span>H (mm)</span><input type="number" id="form-h" value="25" min="10" max="60" /></label>
+            </div>
+            <button id="btn-create-form" class="full" title="Generate a cushion form to fill">＋ Create form</button>
+            <small class="hint">Wearable sizes ≤15 cm: 20–25 mm thick for Shore-40A softness.</small>
+          </details>
+
+          <div id="model-info" class="info-block hidden">
+            <div class="info-row"><span>File</span><b id="info-name">—</b></div>
+            <div class="info-row"><span>Triangles</span><b id="info-tris">—</b></div>
+            <div class="info-row"><span>Size (mm)</span><b id="info-size">—</b></div>
+            <div class="info-row"><span>Volume</span><b id="info-volume">—</b></div>
+          </div>
+
+          <details class="sub" id="orient-opts">
+            <summary>Orient object on bed</summary>
+            <div class="grid-3">
+              <div class="field-slider"><label>X° <output id="out-mrx">0</output></label><input type="range" id="model-rot-x" min="0" max="360" step="15" value="0" /></div>
+              <div class="field-slider"><label>Y° <output id="out-mry">0</output></label><input type="range" id="model-rot-y" min="0" max="360" step="15" value="0" /></div>
+              <div class="field-slider"><label>Z° <output id="out-mrz">0</output></label><input type="range" id="model-rot-z" min="0" max="360" step="15" value="0" /></div>
+            </div>
+            <button id="btn-orient-reset" class="full" title="Reset object orientation">↺ Reset orientation</button>
+            <small class="hint">Rotates the imported part itself (re-orient for printing), not the lattice.</small>
+          </details>
+        </section>
+
+        <section class="group">
+          <h2>2 · Lattice</h2>
+
+          <label class="field">
+            <span>Type</span>
+            <select id="lat-type">
+              <option value="bcc">BCC — diagonal (best for TPE)</option>
+              <option value="cubic">Simple cubic — X/Y/Z struts</option>
+              <option value="fcc">FCC — face-centered</option>
+              <option value="kelvin">Kelvin — truncated octahedra (foam)</option>
+              <option value="gyroid">Gyroid — sheet (TPMS surface)</option>
+              <option value="gyroid-skeletal">Gyroid — skeletal (strut net)</option>
+            </select>
+          </label>
+
+          <div class="field-slider">
+            <label>Cell size <output id="out-cell">10.0</output> mm</label>
+            <input type="range" id="lat-cell" min="5" max="30" step="0.5" value="10" />
+          </div>
+
+          <div class="field-slider">
+            <label>Strut diameter <output id="out-strut">1.20</output> mm</label>
+            <input type="range" id="lat-strut" min="0.4" max="3" step="0.05" value="1.2" />
+          </div>
+
+          <div class="field-slider">
+            <label>Infill density <output id="out-density">—</output> %</label>
+            <input type="range" id="lat-density" min="1" max="100" step="1" value="15" />
+            <small class="hint">Density ↔ strut diameter are linked at the current cell size.</small>
+          </div>
+
+          <div class="grid-2">
+            <div class="field-slider">
+              <label>Bottom layers <output id="out-bottom">0</output></label>
+              <input type="range" id="lat-bottom" min="0" max="10" step="1" value="0" />
+            </div>
+            <div class="field-slider">
+              <label>Top layers <output id="out-top">0</output></label>
+              <input type="range" id="lat-top" min="0" max="10" step="1" value="0" />
+            </div>
+          </div>
+
+          <details class="sub">
+            <summary>Orientation (rotate lattice)</summary>
+            <div class="grid-3">
+              <div class="field-slider">
+                <label>X° <output id="out-rotx">0</output></label>
+                <input type="range" id="lat-rotx" min="0" max="90" step="1" value="0" />
+              </div>
+              <div class="field-slider">
+                <label>Y° <output id="out-roty">0</output></label>
+                <input type="range" id="lat-roty" min="0" max="90" step="1" value="0" />
+              </div>
+              <div class="field-slider">
+                <label>Z° <output id="out-rotz">0</output></label>
+                <input type="range" id="lat-rotz" min="0" max="90" step="1" value="0" />
+              </div>
+            </div>
+          </details>
+
+          <details class="sub" id="gyroid-opts" open>
+            <summary>Gyroid options (sheet / skeletal)</summary>
+            <div class="field-slider">
+              <label>Cell period <output id="out-gyroid-period">14.0</output> mm</label>
+              <input type="range" id="gyroid-period" min="5" max="40" step="0.5" value="14" />
+            </div>
+            <div class="grid-2">
+              <div class="field-slider">
+                <label>Wall thickness <output id="out-gyroid-wall">0.8</output> mm</label>
+                <input type="range" id="gyroid-wall" min="0.4" max="3" step="0.05" value="0.8" />
+              </div>
+              <div class="field-slider">
+                <label>Iso offset <output id="out-gyroid-iso">0.00</output></label>
+                <input type="range" id="gyroid-iso" min="-0.5" max="0.5" step="0.02" value="0" />
+              </div>
+            </div>
+            <div class="grid-3">
+              <div class="field-slider">
+                <label>Phase X° <output id="out-gyroid-px">0</output></label>
+                <input type="range" id="gyroid-px" min="0" max="180" step="5" value="0" />
+              </div>
+              <div class="field-slider">
+                <label>Phase Y° <output id="out-gyroid-py">0</output></label>
+                <input type="range" id="gyroid-py" min="0" max="180" step="5" value="0" />
+              </div>
+              <div class="field-slider">
+                <label>Phase Z° <output id="out-gyroid-pz">0</output></label>
+                <input type="range" id="gyroid-pz" min="0" max="180" step="5" value="0" />
+              </div>
+            </div>
+            <div class="field-slider">
+              <label>Thickness gradient (stiffer base) <output id="out-gyroid-grad">0.00</output></label>
+              <input type="range" id="gyroid-grad" min="0" max="1" step="0.05" value="0" />
+            </div>
+            <div class="grid-2" id="skeletal-opts">
+              <div class="field-slider">
+                <label>Node ball Ø <output id="out-gyroid-node">0.0</output> mm</label>
+                <input type="range" id="gyroid-node" min="0" max="5" step="0.1" value="0" />
+              </div>
+              <label class="field"><span>Strut taper</span>
+                <select id="gyroid-taper">
+                  <option value="uniform">Uniform</option>
+                  <option value="hourglass">Hourglass (thin mid)</option>
+                  <option value="bone">Bone (thick ends)</option>
+                </select>
+              </label>
+              <label class="field"><span>Cross-section</span>
+                <select id="gyroid-xsection">
+                  <option value="round">Round</option>
+                  <option value="triangular">Triangular</option>
+                  <option value="star">Star</option>
+                </select>
+              </label>
+              <label class="field"><span>Density gradient</span>
+                <select id="gyroid-densgrad">
+                  <option value="none">None</option>
+                  <option value="z">Smaller cells at base (Z)</option>
+                  <option value="radial">Smaller cells at edge (radial)</option>
+                </select>
+              </label>
+            </div>
+          </details>
+        </section>
+
+        <section class="group">
+          <h2>3 · Perforated shell</h2>
+
+          <label class="field">
+            <span>Shell pattern</span>
+            <select id="shell-style">
+              <optgroup label="Knit / textile">
+                <option value="rib">Rib Knit / Micro-Rib</option>
+                <option value="woven">3D Woven mesh (warp + weft)</option>
+              </optgroup>
+              <optgroup label="Mesh / sport">
+                <option value="hex">Hex mesh</option>
+                <option value="circle">Circular array</option>
+                <option value="mesh">Sine / interlock mesh</option>
+                <option value="voronoi" selected>Voronoi organic</option>
+              </optgroup>
+              <optgroup label="Structural">
+                <option value="auxetic">Auxetic (re-entrant)</option>
+                <option value="lattice">Lattice-matched</option>
+              </optgroup>
+              <optgroup label="Gyroid-matched">
+                <option value="gyroid">Gyroid-matched (flowing)</option>
+                <option value="node">Node shell (strut exits)</option>
+              </optgroup>
+              <optgroup label="Plain">
+                <option value="solid">Solid — clean skin</option>
+                <option value="none">None — bare lattice</option>
+              </optgroup>
+            </select>
+            <div class="ps-meter">
+              <div class="ps-meter-head"><span>Printability</span><span id="ps-meter-score">—</span></div>
+              <div class="ps-meter-bar"><div id="ps-meter-fill"></div></div>
+              <small id="ps-meter-sub" class="hint"></small>
+            </div>
+            <div id="ps-warnings" class="pcheck-list"></div>
+            <button id="btn-surprise" class="full" title="Random aesthetically-tuned surface">🎲 Surprise me</button>
+          </label>
+
+          <div class="grid-2">
+            <div class="field-slider">
+              <label>Hole size <output id="out-hole-size">4.0</output> mm</label>
+              <input type="range" id="hole-size" min="1" max="20" step="0.5" value="4" />
+            </div>
+            <div class="field-slider">
+              <label>Hole pitch <output id="out-hole-pitch">9.0</output> mm</label>
+              <input type="range" id="hole-pitch" min="3" max="40" step="0.5" value="9" />
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <label class="field"><span>Hole shape</span>
+              <select id="hole-shape">
+                <option value="circle">Circle</option>
+                <option value="hex">Hexagon</option>
+                <option value="diamond">Diamond</option>
+              </select>
+            </label>
+            <div class="field-slider">
+              <label>Min wall <output id="out-min-wall">1.2</output> mm</label>
+              <input type="range" id="min-wall" min="0.4" max="5" step="0.1" value="1.2" />
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="field-slider">
+              <label>Shell perimeters <output id="out-shell-perims">1</output></label>
+              <input type="range" id="shell-perims" min="1" max="6" step="1" value="1" />
+            </div>
+            <div class="field-slider">
+              <label>Hole taper <output id="out-hole-taper">0.5</output></label>
+              <input type="range" id="hole-taper" min="0" max="2" step="0.1" value="0.5" />
+            </div>
+          </div>
+
+          <div class="grid-2">
+            <div class="field-slider">
+              <label>Shell ↔ lattice merge <output id="out-merge-intensity">0.50</output></label>
+              <input type="range" id="merge-intensity" min="0" max="1" step="0.05" value="0.5" />
+            </div>
+            <div class="field-slider">
+              <label>Hole density × <output id="out-hole-density">1.00</output></label>
+              <input type="range" id="hole-density" min="0.5" max="2" step="0.05" value="1" />
+            </div>
+          </div>
+          <small class="hint">Merge welds struts to the skin so it reads as one structure. For gyroid interiors choose the <b>Gyroid-matched</b> (sheet) or <b>Node shell</b> (skeletal) pattern.</small>
+
+          <details class="sub">
+            <summary>Pattern shaping</summary>
+            <div class="grid-2">
+              <div class="field-slider">
+                <label>Rotation <output id="out-pattern-rotation">0</output>°</label>
+                <input type="range" id="pattern-rotation" min="0" max="360" step="5" value="0" />
+              </div>
+              <div class="field-slider">
+                <label>Seed jitter <output id="out-seed-jitter">0.30</output></label>
+                <input type="range" id="seed-jitter" min="0" max="1" step="0.05" value="0.3" />
+              </div>
+              <div class="field-slider">
+                <label>Scale · centre <output id="out-hole-scale-center">1.30</output></label>
+                <input type="range" id="hole-scale-center" min="0.5" max="2" step="0.05" value="1.3" />
+              </div>
+              <div class="field-slider">
+                <label>Scale · edge <output id="out-hole-scale-edge">0.80</output></label>
+                <input type="range" id="hole-scale-edge" min="0.3" max="2" step="0.05" value="0.8" />
+              </div>
+              <div class="field-slider">
+                <label>Scale · height <output id="out-hole-scale-height">0.00</output></label>
+                <input type="range" id="hole-scale-height" min="-1" max="1" step="0.05" value="0" />
+              </div>
+            </div>
+          </details>
+
+          <details class="sub">
+            <summary>Textile pattern parameters</summary>
+            <div class="grid-2">
+              <div class="field-slider"><label>Rib width <output id="out-rib-width">1.2</output> mm</label><input type="range" id="rib-width" min="0.4" max="6" step="0.1" value="1.2" /></div>
+              <div class="field-slider"><label>Rib gap <output id="out-rib-gap">2.0</output> mm</label><input type="range" id="rib-gap" min="0.4" max="8" step="0.1" value="2.0" /></div>
+              <div class="field-slider"><label>Rib angle <output id="out-rib-angle">0</output>°</label><input type="range" id="rib-angle" min="-60" max="60" step="5" value="0" /></div>
+              <div class="field-slider"><label>Mesh angle <output id="out-mesh-angle">45</output>°</label><input type="range" id="mesh-angle" min="10" max="80" step="5" value="45" /></div>
+              <div class="field-slider"><label>Mesh strand <output id="out-mesh-strand">0.8</output> mm</label><input type="range" id="mesh-strand" min="0.4" max="3" step="0.05" value="0.8" /></div>
+              <div class="field-slider"><label>Mesh opening <output id="out-mesh-opening">3.0</output> mm</label><input type="range" id="mesh-opening" min="0.5" max="10" step="0.5" value="3.0" /></div>
+              <div class="field-slider"><label>Auxetic W <output id="out-aux-w">6.0</output> mm</label><input type="range" id="aux-cell-w" min="4" max="16" step="0.5" value="6" /></div>
+              <div class="field-slider"><label>Auxetic H <output id="out-aux-h">9.0</output> mm</label><input type="range" id="aux-cell-h" min="4" max="20" step="0.5" value="9" /></div>
+              <div class="field-slider"><label>Re-entrant <output id="out-aux-re">0.30</output></label><input type="range" id="aux-reentrant" min="0" max="0.45" step="0.01" value="0.3" /></div>
+              <div class="field-slider"><label>Aux wall <output id="out-aux-wall">1.2</output> mm</label><input type="range" id="aux-wall" min="0.4" max="3" step="0.1" value="1.2" /></div>
+            </div>
+            <small class="hint">Micro-Rib (body contact): set rib width ≈0.6, gap ≈0.8 for a fine fabric feel.</small>
+          </details>
+
+          <details class="sub" open>
+            <summary>3D Woven mesh (warp + weft)</summary>
+            <div class="grid-2">
+              <div class="field-slider"><label>Warp strands <output id="out-warp-count">28</output></label><input type="range" id="warp-count" min="6" max="96" step="1" value="28" /></div>
+              <div class="field-slider"><label>Weft pitch <output id="out-weft-pitch">4.0</output> mm</label><input type="range" id="weft-pitch" min="1.5" max="12" step="0.5" value="4" /></div>
+              <div class="field-slider"><label>Strand Ø <output id="out-strand-d">0.8</output> mm</label><input type="range" id="strand-d" min="0.4" max="2.5" step="0.05" value="0.8" /></div>
+              <div class="field-slider"><label>Weave depth <output id="out-weave-depth">0.5</output> mm</label><input type="range" id="weave-depth" min="0.1" max="2" step="0.05" value="0.5" /></div>
+              <label class="field"><span>Weave pattern</span>
+                <select id="weave-pattern">
+                  <option value="plain">Plain (over-under)</option>
+                  <option value="twill">Twill (diagonal)</option>
+                  <option value="basket">Basket (2×2)</option>
+                </select>
+              </label>
+            </div>
+            <small class="hint">Real interlacing 3-D strands — warp + weft pass over/under and touch at crossings. Pick shell pattern <b>3D Woven mesh</b>.</small>
+          </details>
+
+          <label class="field">
+            <span>Surface↔interior transition</span>
+            <select id="transition">
+              <option value="custom">— custom —</option>
+              <option value="hard">Hard junction</option>
+              <option value="gradient">Gradient merge</option>
+              <option value="eruption">Skin eruption</option>
+              <option value="anchor">Strut anchoring</option>
+            </select>
+          </label>
+
+          <details class="sub" open>
+            <summary>Surface quality</summary>
+            <div class="grid-2">
+              <label class="field"><span>Seam position</span>
+                <select id="ps-seam-mode">
+                  <option value="aligned">Aligned (rear)</option>
+                  <option value="nearest">Nearest</option>
+                  <option value="random">Random</option>
+                </select>
+              </label>
+              <label class="field"><span>Outer-wall speed (mm/s)</span><input type="number" id="ps-extperim-speed" value="15" min="2" step="1" /></label>
+              <label class="field"><span>Seam coast (mm)</span><input type="number" id="ps-coast" value="0.3" min="0" max="1" step="0.05" /></label>
+              <label class="field"><span>Outer-wall accel (mm/s²)</span><input type="number" id="ps-outer-accel" value="800" min="100" step="50" /></label>
+              <label class="field checkbox"><input type="checkbox" id="ps-window-retract" checked /><span>Retract across windows</span></label>
+            </div>
+          </details>
+        </section>
+
+        <section class="group">
+          <h2>4 · TPE print settings</h2>
+
+          <div class="grid-2">
+            <label class="field"><span>Print speed (mm/s)</span><input type="number" id="ps-print" value="20" min="1" step="1" /></label>
+            <label class="field"><span>Travel speed (mm/s)</span><input type="number" id="ps-travel" value="150" min="1" step="1" /></label>
+            <label class="field"><span>Nozzle temp (°C)</span><input type="number" id="ps-temp" value="220" step="1" /></label>
+            <label class="field"><span>Bed temp (°C)</span><input type="number" id="ps-bed" value="40" step="1" /></label>
+            <label class="field"><span>Retract dist (mm)</span><input type="number" id="ps-retract" value="1.5" step="0.1" /></label>
+            <label class="field"><span>Retract speed (mm/s)</span><input type="number" id="ps-retract-speed" value="25" step="1" /></label>
+            <label class="field"><span>Pressure Advance K</span><input type="number" id="ps-pa" value="0.05" step="0.01" /></label>
+            <label class="field"><span>Z-hop (mm)</span><input type="number" id="ps-zhop" value="0" step="0.1" /></label>
+            <label class="field"><span>Layer height (mm)</span><input type="number" id="ps-layer" value="0.2" step="0.05" /></label>
+            <label class="field"><span>Line width (mm)</span><input type="number" id="ps-linewidth" value="0.45" step="0.05" /></label>
+            <label class="field"><span>Filament Ø (mm)</span><input type="number" id="ps-filament" value="1.75" step="0.05" /></label>
+            <label class="field"><span>Flow multiplier</span><input type="number" id="ps-flow" value="1.0" step="0.05" /></label>
+            <label class="field"><span>Nozzle Ø (mm)</span><input type="number" id="ps-nozzle" value="0.4" min="0.2" max="1" step="0.05" /></label>
+          </div>
+
+          <details class="sub">
+            <summary>Stringing / TPE tuning</summary>
+            <div class="grid-2">
+              <label class="field"><span>Base fan (%)</span><input type="number" id="ps-fan-base" value="20" min="0" max="100" /></label>
+              <label class="field"><span>Bridge fan (%)</span><input type="number" id="ps-fan-bridge" value="100" min="0" max="100" /></label>
+              <label class="field"><span>Horizontal angle (°)</span><input type="number" id="ps-horiz-angle" value="35" min="0" max="90" /></label>
+              <label class="field"><span>Horizontal speed ×</span><input type="number" id="ps-horiz-mult" value="0.5" min="0.1" max="1" step="0.05" /></label>
+              <label class="field"><span>Extra retract (mm)</span><input type="number" id="ps-extra-retract" value="0.4" step="0.1" /></label>
+              <label class="field"><span>Wipe dist (mm)</span><input type="number" id="ps-wipe" value="0.8" step="0.1" /></label>
+              <label class="field"><span>Combing max (mm)</span><input type="number" id="ps-combing" value="2.0" step="0.5" /></label>
+              <label class="field"><span>First-layer speed (mm/s)</span><input type="number" id="ps-first-speed" value="15" min="2" step="1" /></label>
+              <label class="field"><span>First-layer fan (%)</span><input type="number" id="ps-fan-first" value="0" min="0" max="100" /></label>
+              <label class="field"><span>Wall/feature fan (%)</span><input type="number" id="ps-fan-wall" value="30" min="0" max="100" /></label>
+              <label class="field"><span>Small-feature speed ×</span><input type="number" id="ps-small-mult" value="0.8" min="0.2" max="1" step="0.05" /></label>
+              <label class="field"><span>Small-feature max (mm)</span><input type="number" id="ps-small-len" value="3.0" min="0" step="0.5" /></label>
+              <label class="field"><span>Jerk (mm/s)</span><input type="number" id="ps-jerk" value="8" min="1" step="1" /></label>
+              <label class="field checkbox"><input type="checkbox" id="ps-nn" checked /><span>Nearest-neighbor ordering</span></label>
+            </div>
+          </details>
+        </section>
+
+      </div>
+    </aside>
+
+    <!-- ============================ CENTER: 3D VIEWPORT ============================ -->
+    <section id="center-panel">
+      <div id="viewport"></div>
+
+      <div id="viewport-overlay">
+        <div id="dims-badge" class="badge hidden"></div>
+        <div id="status-badge" class="badge hidden"></div>
+      </div>
+
+      <div id="legend" class="legend hidden">
+        <span><i style="background:#34d399"></i> Vertical strut</span>
+        <span><i style="background:#f59e0b"></i> Near-horizontal (slow + fan)</span>
+        <span><i style="background:#60a5fa"></i> Shell wall</span>
+        <span><i style="background:#4dd1eb"></i> Shell hole edge</span>
+        <span><i style="background:#a78bfa"></i> Solid layer</span>
+      </div>
+
+      <div id="view-controls" class="view-controls">
+        <button data-view="iso" title="Isometric">⬢</button>
+        <button data-view="top" title="Top">▩</button>
+        <button data-view="front" title="Front">▭</button>
+        <label class="toggle"><input type="checkbox" id="toggle-mesh" checked /> Mesh</label>
+        <label class="toggle"><input type="checkbox" id="toggle-lattice" checked /> Lattice</label>
+      </div>
+
+      <!-- VIEW PANEL — view-only controls (must stay OUTSIDE #left-panel
+           so they never trigger geometry regeneration). -->
+      <div id="view-panel" class="view-panel">
+        <div class="vp-row">
+          <label>Shell opacity</label>
+          <input type="range" id="view-shell-opacity" min="0" max="100" step="1" value="18" />
+          <output id="out-view-opacity">18</output>
+        </div>
+        <div class="vp-row">
+          <label>Colour</label>
+          <select id="view-color-mode">
+            <option value="stress">Stress (angle)</option>
+            <option value="printRisk">Print risk</option>
+            <option value="density">Density</option>
+            <option value="design">Design</option>
+          </select>
+          <label class="vp-check"><input type="checkbox" id="view-autorotate" /> Spin</label>
+        </div>
+        <div class="vp-row">
+          <label class="vp-check"><input type="checkbox" id="view-clip-enable" /> Clip</label>
+          <select id="view-clip-axis">
+            <option value="x">X</option><option value="y">Y</option><option value="z">Z</option>
+          </select>
+          <input type="range" id="view-clip-pos" min="0" max="100" step="1" value="100" />
+          <output id="out-view-clip-pos">100</output>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================ RIGHT: G-CODE PREVIEW ============================ -->
+    <aside id="right-panel" class="panel">
+      <div class="gcode-header">
+        <h2>G-Code</h2>
+        <button id="btn-generate" disabled>↻ Generate</button>
+      </div>
+      <div id="view-stats" class="gcode-stats hidden">
+        <div class="stat"><span>Material</span><b id="vs-material">—</b></div>
+        <div class="stat"><span>Est. time</span><b id="vs-time">—</b></div>
+        <div class="stat"><span>Stringing risk</span><b id="vs-risk">—</b></div>
+        <div class="stat"><span>Open volume</span><b id="vs-open">—</b></div>
+        <div class="stat"><span>Airflow resist.</span><b id="vs-airflow">—</b></div>
+        <div class="stat"><span>Segments</span><b id="vs-struts">—</b></div>
+        <div class="stat"><span>Hole area</span><b id="vs-holes">—</b></div>
+      </div>
+      <div id="gcode-stats" class="gcode-stats">
+        <div class="stat"><span>Lines</span><b id="gc-lines">—</b></div>
+        <div class="stat"><span>Filament</span><b id="gc-filament">—</b></div>
+        <div class="stat"><span>Est. time</span><b id="gc-time">—</b></div>
+        <div class="stat"><span>Segments</span><b id="gc-struts">—</b></div>
+      </div>
+      <pre id="gcode-output" class="gcode-output">Import an STL and generate a lattice to preview G-Code here.</pre>
+    </aside>
+  </main>
+
+  <!-- Busy / computing overlay -->
+  <div id="busy" class="busy hidden"><div class="spinner"></div><span id="busy-text">Working…</span></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
